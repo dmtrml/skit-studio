@@ -1,4 +1,4 @@
-"""Gemini TTS through the API (the same models as AI Studio "Generate speech"). Key: env GEMINI_API_KEY, never printed.
+"""Gemini TTS through the API (the same models as AI Studio "Generate speech"). Key: env GEMINI_API_KEY or ~/.skit-studio/gemini-key.txt, never printed.
 
     python <plugin>/tools/gemini_tts.py <out.wav> --text "..." [--style "..."] [--model gemini-2.5-flash-preview-tts] [--voice Charon]
     python <plugin>/tools/gemini_tts.py <out.wav> --text-file dialog.txt --speakers "Guy=Puck,Ko=Charon" [--style "..."]
@@ -30,6 +30,18 @@ import numpy as np
 API = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 
+def key_from_file() -> str:
+    """The key from ~/.skit-studio/gemini-key.txt: the first line that is not empty and not a # comment."""
+    try:
+        for ln in (Path.home() / ".skit-studio" / "gemini-key.txt").read_text(encoding="utf-8-sig", errors="replace").splitlines():
+            ln = ln.strip()
+            if ln and not ln.startswith("#"):
+                return ln
+    except OSError:
+        pass
+    return ""
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("out", type=Path)
@@ -44,9 +56,9 @@ def main() -> None:
         a.text = a.text_file.read_text(encoding="utf-8").strip()
     if not a.text:
         sys.exit("give --text or --text-file")
-    key = os.environ.get("GEMINI_API_KEY")
+    key = os.environ.get("GEMINI_API_KEY") or key_from_file()
     if not key:
-        sys.exit("GEMINI_API_KEY is not set")
+        sys.exit("no Gemini key: set GEMINI_API_KEY or run scripts/install.py --key-file")
     # 2.5 takes the style inline (sometimes returns no audio, finishReason OTHER: just run again).
     # 3.8 reads an inline style line aloud and refuses systemInstruction (HTTP 400, 06.11): style is dropped there.
     sys_style = False

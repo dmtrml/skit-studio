@@ -111,6 +111,22 @@ def test_install_and_new_skit():
         check(rc in (0, 1) and ("ГОТОВО" in out or "НЕ ХВАТАЕТ" in out or "МОЖНО НАЧИНАТЬ" in out), "install.py check mode prints a verdict")
         check((home / ".skit-studio" / "config.json").is_file(), "install.py writes config.json in home")
         check("AIza" not in out, "install.py never prints a key")
+        # the key file: created by --key-file, read by the check, never printed
+        env2 = {k: v for k, v in env.items() if k != "GEMINI_API_KEY"}
+        env2["SKIT_NO_OPEN"] = "1"
+        kf = home / ".skit-studio" / "gemini-key.txt"
+        rc, out, err = run([PY, str(ROOT / "scripts" / "install.py"), "--key-file"], env=env2)
+        check(rc == 0 and kf.is_file() and kf.read_text(encoding="utf-8").startswith("#"), "install.py --key-file creates the key file with a comment line")
+        kf.write_text(kf.read_text(encoding="utf-8") + "AIzaFAKE-TEST-KEY\n", encoding="utf-8")
+        rc, out, err = run([PY, str(ROOT / "scripts" / "install.py"), "--json"], env=env2)
+        check("AIza" not in out + err, "install.py never prints a key from the key file")
+        if sys.platform != "win32":  # on Windows the check may also find a key in the user's registry
+            kf.write_text("# только комментарий\n", encoding="utf-8")
+            rc, out2, err = run([PY, str(ROOT / "scripts" / "install.py"), "--json"], env=env2)
+            g = [r for r in json.loads(out2) if r["id"] == "gemini"][0]
+            check(not g["ok"], "a key file with only a comment is not a key")
+        g = [r for r in json.loads(out) if r["id"] == "gemini"][0]
+        check(g["ok"], "install.py finds the key in the key file")
         # a plugin copy with a fake template (the real one lands at assembly)
         plug = td / "Плагин"
         for d in ("scripts", "tools"):

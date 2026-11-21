@@ -7,7 +7,7 @@
 
 Что нужно: Python 3.10+, Node.js 18+, ffmpeg, пакеты Python (faster-whisper, numpy, pillow, soundfile, scipy),
 playwright (в ~/.skit-studio/node_modules, для инструментов проверки кадров), HyperFrames (прогрев npx),
-ключ GEMINI_API_KEY (голос), звуки Mixkit (скачиваются в ~/.skit-studio/sfx/: их лицензия не разрешает
+ключ Gemini (голос; переменная GEMINI_API_KEY или файл ~/.skit-studio/gemini-key.txt, его открывает --key-file), звуки Mixkit (скачиваются в ~/.skit-studio/sfx/: их лицензия не разрешает
 класть файлы в плагин). Ключ никогда не печатается. Пишет ~/.skit-studio/config.json.
 """
 import argparse
@@ -111,8 +111,45 @@ def c_hyperframes():
     return item("hyperframes", ok, f"npx hyperframes@{hf_pin()} прогрет" if ok else "ещё не прогревался", "python install.py --install --only hyperframes")
 
 
+KEY_FILE = HOME / "gemini-key.txt"
+KEY_FILE_HEAD = "# Вставьте ключ Gemini на строку ниже, сохраните файл (Ctrl+S) и закройте окно.\n"
+
+
+def key_from_file():
+    """The key from ~/.skit-studio/gemini-key.txt: the first line that is not empty and not a # comment."""
+    try:
+        for ln in KEY_FILE.read_text(encoding="utf-8-sig", errors="replace").splitlines():
+            ln = ln.strip()
+            if ln and not ln.startswith("#"):
+                return ln
+    except OSError:
+        pass
+    return ""
+
+
+def open_key_file():
+    """Create the key file if missing and open it in a plain text editor. Never prints the content."""
+    HOME.mkdir(parents=True, exist_ok=True)
+    if not KEY_FILE.exists():
+        KEY_FILE.write_text(KEY_FILE_HEAD, encoding="utf-8")
+    print(f"файл для ключа: {KEY_FILE}")
+    if os.environ.get("SKIT_NO_OPEN"):
+        return 0
+    try:
+        if WIN:
+            subprocess.Popen(["notepad.exe", str(KEY_FILE)])
+        elif MAC:
+            subprocess.Popen(["open", "-e", str(KEY_FILE)])
+        else:
+            subprocess.Popen(["xdg-open", str(KEY_FILE)])
+        print("открыл в текстовом редакторе: вставьте ключ на пустую строку, сохраните и закройте")
+    except OSError as e:
+        print("не смог открыть редактор, откройте файл сами:", e)
+    return 0
+
+
 def gemini_key_set():
-    if os.environ.get("GEMINI_API_KEY"):
+    if os.environ.get("GEMINI_API_KEY") or key_from_file():
         return True
     if WIN:
         try:
@@ -126,7 +163,7 @@ def gemini_key_set():
 
 def c_gemini():
     ok = gemini_key_set()
-    how = "ключ бесплатно: aistudio.google.com/apikey (вход аккаунтом Google, «Create API key»); положите в переменную среды GEMINI_API_KEY"
+    how = "ключ бесплатно: aistudio.google.com/apikey (вход аккаунтом Google, «Create API key»); потом python install.py --key-file — откроется файл, вставьте ключ и сохраните"
     return item("gemini", ok, "ключ найден (не показываю)" if ok else "ключа нет", "" if ok else how)
 
 
@@ -240,7 +277,10 @@ def main(argv=None):
     ap.add_argument("--install", action="store_true", help="поставить недостающее")
     ap.add_argument("--only", help="через запятую: " + ",".join(INSTALLERS))
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--key-file", action="store_true", help="открыть файл для ключа Gemini в текстовом редакторе")
     a = ap.parse_args(argv)
+    if a.key_file:
+        return open_key_file()
     write_cfg(read_cfg())
     if a.install:
         want = a.only.split(",") if a.only else list(INSTALLERS)
