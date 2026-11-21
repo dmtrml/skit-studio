@@ -1,0 +1,15 @@
+{
+  "name": "skit-studio",
+  "description": "Скетч-студия: вертикальные скетчи с ИИ-помощником Ко",
+  "owner": {
+    "name": "Dimitri Codev"
+  },
+  "plugins": [
+    {
+      "name": "skit-studio",
+      "source": "./",
+      "description": "Скетч-студия: вертикальный скетч с ИИ-помощником Ко — от шутки до финала 1080×1920",
+      "version": "0.1.0"
+    }
+  ]
+}

@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1080,height=1920">
+  <title>Ko skit</title>
+  <script src="assets/vendor/gsap.min.js"></script>
+  <script src="data.js"></script>
+  <script src="cues.js"></script>
+  <script src="passport.js"></script>
+  <script src="look.js"></script>
+  <script type="importmap">{"imports":{"three":"./assets/vendor/three.module.js","three/addons/":"./assets/vendor/jsm/"}}</script>
+  <style>
+    *{box-sizing:border-box}
+    html,body{margin:0;width:1080px;height:1920px;overflow:hidden;background:#0d0c14}
+    #root{position:relative;width:1080px;height:1920px;overflow:hidden;background:#0d0c14}
+    .clip{position:absolute;inset:0;overflow:hidden}
+    canvas#gl{position:absolute;left:0;top:0;width:1080px;height:1920px;display:block}
+    #cap{position:absolute;left:90px;width:900px;top:340px;transform:translateY(-50%);text-align:center;color:#fff;
+      font:600 54px/1.15 'Segoe UI',Arial,sans-serif;text-shadow:0 2px 10px rgba(0,0,0,.85),0 0 3px rgba(0,0,0,.9);opacity:0}
+    #grain{position:absolute;left:0;top:0;width:1080px;height:1920px;mix-blend-mode:overlay;opacity:.1;pointer-events:none}
+    #vig{position:absolute;inset:0;pointer-events:none;display:none;background:radial-gradient(ellipse 75% 70% at 50% 52%,rgba(0,0,0,0) 45%,rgba(8,4,20,.62) 100%)}
+    #ins{position:absolute;inset:0;background:#000;visibility:hidden;overflow:hidden;font-family:"Segoe UI",Arial,sans-serif}
+  </style>
+</head>
+<body>
+<div id="root" data-hf-id="sk-root" data-composition-id="main" data-start="0" data-duration="10.7" data-width="1080" data-height="1920" data-fps="30">
+  <section id="sk-clip" data-hf-id="sk-clip" class="clip" data-start="0" data-duration="10.7" data-track-index="0">
+    <canvas id="gl" data-hf-id="sk-gl" data-layout-ignore=""></canvas>
+    <canvas id="grain" width="540" height="960" data-layout-ignore=""></canvas><div id="vig" data-hf-id="sk-vig" data-layout-ignore=""></div>
+    <div id="ins" data-hf-id="sk-ins" data-layout-ignore=""></div>
+    <div id="tick" data-hf-id="sk-tick" data-layout-allow-overflow="" style="position:absolute;left:-40px;top:0;width:2px;height:2px;background:#1c1a26"></div>
+    <div id="cap" data-hf-id="sk-cap" data-layout-ignore=""></div>
+  </section>
+  <audio id="voice" data-start="0" data-duration="10.7" data-track-index="10" src="assets/voice.wav" data-volume="1"></audio>
+  <audio id="sfx" data-start="0" data-duration="10.7" data-track-index="11" src="assets/sfx_bed.wav" data-volume="1"></audio>
+</div>
+<script>
+  window.__hf = window.__hf || {}; window.__hf.buildReady = window.__hf.buildReady || {};
+  window.__hf.buildReady['ko-skit'] = new Promise(r => { window.__skReady = r; });
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { RoundedBoxGeometry } from './assets/vendor/RoundedBoxGeometry.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { upgrade } from './look3.js';
+import { atmo } from './atmo.js';
+import { buildGuy, buildKo, koColors, applyLook } from './characters.js';
+// PROPS / INSERTS: one side-effect import per file, e.g.  import './props/phone.js';  import './inserts/chat.js';  (props/README.md)
+
+// heavy init runs after the load event (keeps page load < 10 s for check/snapshot tooling)
+window.addEventListener('load', () => setTimeout(() => {
+document.body.classList.add((window.LOOK || 'comic') === 'comic' ? 'comic' : 'soft');
+const W = 1080, H = 1920, dpr = Math.min(window.devicePixelRatio || 1, 2);
+const TL = window.SKIT, RMS = window.RMS, CU = window.CUES, D = TL.duration;
+const COMIC = (window.LOOK || 'comic') === 'comic';
+const INK = '#151714', RED = 0xE16D6D;
+const PS = window.PASSPORTS || {};   // passports: code/passport.js (written by characters/use.py)
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+const seg = (t, a, b) => clamp((t - a) / (b - a), 0, 1);
+const out3 = p => 1 - Math.pow(1 - p, 3);
+const backOut = p => { const s = 1.9; p -= 1; return p * p * ((s + 1) * p + s) + 1; };
+const rmsAt = t => RMS[clamp(Math.round(t * 30), 0, RMS.length - 1)] || 0;
+const V = (x, y, z) => new THREE.Vector3(x, y, z);
+
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('gl'), antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(dpr); renderer.setSize(W, H, false); renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = .95; renderer.setClearColor(COMIC ? 0x15131E : 0x120E1E, 1);
+if (!COMIC) { renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap; document.getElementById('vig').style.display = 'block'; }
+const scene = new THREE.Scene();
+if (!COMIC) scene.fog = new THREE.Fog(0x1a1230, 5, 13);
+const cam = new THREE.PerspectiveCamera(40, W / H, .05, 60);
+
+// ---------- materials: comic = toon shader (two tones, halftone, hard rim) ; soft = flat-shaded standard
+const v3 = h => { const n = parseInt(h.slice(1), 16); return new THREE.Vector3((n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255); };
+const mixHex = (a, b, k) => '#' + new THREE.Color(a).lerp(new THREE.Color(b), k).getHexString();
+const auto = b => [b, mixHex(b, '#1a1730', .38), mixHex(b, '#0e0c18', .62), mixHex(b, '#ffffff', .28)];
+const LDIR = V(-.4, .7, .6).normalize();
+const toonVS = `varying vec3 vN;
+void main(){ vN = normalize(mat3(modelMatrix) * normal); gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(position, 1.); }`;
+const toonFS = `uniform vec3 uBase, uShade, uDeep, uHi, uL; uniform float uCell, uFlash; varying vec3 vN;
+void main(){
+  float l = dot(normalize(vN), uL) * .5 + .5;
+  float sh = 1. - smoothstep(.40, .43, l);
+  vec3 c = mix(uBase, uShade, sh);
+  float a = .7854; mat2 R = mat2(cos(a), -sin(a), sin(a), cos(a));
+  vec2 f = fract(R * (gl_FragCoord.xy / uCell)) - .5;
+  float rad = mix(.16, .46, clamp((.42 - l) / .30, 0., 1.)) * sh;
+  c = mix(c, uDeep, (1. - smoothstep(rad - .07, rad + .07, length(f))) * sh);
+  c = mix(c, uHi, smoothstep(.86, .88, l) * .85);
+  gl_FragColor = vec4(mix(c, vec3(1.), uFlash), 1.);
+}`;
+const outVS = `uniform float uW; void main(){ gl_Position = projectionMatrix * modelViewMatrix * vec4(position + normal * uW, 1.); }`;
+const outFS = `void main(){ gl_FragColor = vec4(.082, .090, .078, 1.); }`;
+function toon(s) {
+  return new THREE.ShaderMaterial({ vertexShader: toonVS, fragmentShader: toonFS, uniforms: {
+    uBase: { value: v3(s[0]) }, uShade: { value: v3(s[1]) }, uDeep: { value: v3(s[2]) }, uHi: { value: v3(s[3]) },
+    uL: { value: LDIR }, uCell: { value: 9 * dpr }, uFlash: { value: 0 } } });
+}
+function inked(geo, mat, w) {
+  const g = new THREE.Group();
+  g.add(new THREE.Mesh(geo, new THREE.ShaderMaterial({ vertexShader: outVS, fragmentShader: outFS, side: THREE.BackSide, uniforms: { uW: { value: w } } })));
+  g.add(new THREE.Mesh(geo, mat));
+  return g;
+}
+// obj(geo, spec, ink, o): spec = hex or [base, shade, deep, hi]; ink = comic outline width (m); o.inkSoft = outline in soft look (Ko only)
+function obj(geo, spec, ink, o) {
+  o = o || {}; const s = Array.isArray(spec) ? spec : auto(spec);
+  let m;
+  if (COMIC) m = toon(s);
+  else {
+    const q = { color: s[0], flatShading: false, roughness: o.rough ?? .62, metalness: o.metal ?? 0, emissive: o.emi ?? 0x000000 };
+    if (spec === PAL.skin) q.roughness = .55;
+    if (spec === PAL.hoodie) { q.roughness = .85; q.sheen = 1; q.sheenRoughness = .35; q.sheenColor = new THREE.Color(0xa8bcff); q.envMapIntensity = 1.6; q.emissive = new THREE.Color(0x4A5F8A).multiplyScalar(.12); }
+    if (spec === PAL.desk || spec === PAL.deskEdge) q.roughness = .85;
+    if (o.clear) { q.clearcoat = o.clear; q.clearcoatRoughness = .25; }
+    m = new THREE.MeshPhysicalMaterial(q);
+  }
+  const w = COMIC ? ink : o.inkSoft;
+  const n = w > 0 ? inked(geo, m, w) : new THREE.Mesh(geo, m);
+  n.userData.mat = m; return n;
+}
+const RB = (w, h, d, r) => new RoundedBoxGeometry(w, h, d, COMIC ? 4 : 5, Math.min(r, Math.min(w, h, d) / 2 - .001));
+const BX = (w, h, d) => new THREE.BoxGeometry(w, h, d);
+const CY = (rt, rb, h, n) => new THREE.CylinderGeometry(rt, rb, h, COMIC ? (n || 22) : Math.max(n || 0, 24));
+const SP = r => new THREE.SphereGeometry(r, COMIC ? 16 : 28, COMIC ? 12 : 18);
+function put(n, x, y, z, parent) { n.position.set(x, y, z); (parent || scene).add(n); return n; }
+const glowMat = (c, o) => new THREE.MeshBasicMaterial(Object.assign({ color: c, fog: false }, o || {}));
+const I = .006;   // default comic outline for big props
+// limb: box from a to b (fixed-length geometry, no scaling -> uniform outline)
+function link(a, b, w, spec, parent, ink) {
+  const len = a.distanceTo(b), n = obj(RB(w, w, len + w * .6, w * .35), spec, ink);
+  n.position.copy(a).lerp(b, .5); n.quaternion.setFromUnitVectors(V(0, 0, 1), b.clone().sub(a).normalize()); parent.add(n); return n;
+}
+
+// ---------- palette (night)
+const PAL = {
+  wall: ['#2A2638', '#1F1C2B', '#15131E', '#3B3550'], floor: ['#241F33', '#1B1727', '#12101B', '#352E49'],
+  desk: ['#7A5440', '#5E4032', '#402B22', '#9A7260'], deskEdge: '#4C3427', hoodie: ['#4A5F8A', '#394A6C', '#2A3752', '#7088B8'],
+  skin: ['#E2B08A', '#C48E69', '#9F6C4C', '#F4D2B4'], hair: '#3B2A2E', jeans: '#2B3248', chair: '#34304A', lap: '#5B5B74', lapLid: '#43435C',
+  limeC: ['#C7E44B', '#A9C33A', '#7C9426', '#EAF6B4'], redC: ['#E16D6D', '#C25555', '#913B3B', '#F6B0B0'],
+  usC: ['#9FB937', '#86A02C', '#62781E', '#C7E44B'], usR: ['#B85A5A', '#9C4646', '#753030', '#E16D6D'],
+};
+const LIME = koColors(PS.ko).hex;   // Ko body colour (default lime)
+
+// ---------- lights (soft look only; comic is unlit shader)
+let keySpot = null, FILL = null;
+if (!COMIC) {
+  scene.add(new THREE.HemisphereLight(0x7088d0, 0x1a1030, .22));
+  keySpot = new THREE.SpotLight(0xFFE2C0, 6.4, 14, .4, 1, 2); keySpot.castShadow = true;
+  keySpot.shadow.mapSize.set(2048, 2048); keySpot.shadow.bias = -.0004; keySpot.shadow.normalBias = .02; keySpot.shadow.radius = 8;
+  scene.add(keySpot); scene.add(keySpot.target);
+  const rim = new THREE.SpotLight(0x9B6BFF, 40, 0, .5, 1, 2); rim.position.set(-.5, 2.6, -1.3); rim.target.position.set(-.8, 1.2, -.1); scene.add(rim, rim.target);
+  const rim2 = new THREE.PointLight(0x9B6BFF, 5, 0, 2); rim2.position.set(1.0, 1.9, -1.0); scene.add(rim2);
+  const lamp = new THREE.PointLight(0xFFB070, 1.2, 0, 2); lamp.position.set(2.0, 2.05, -1.25); scene.add(lamp);
+  // tiny dark-violet box room with 3 emissive panels -> PMREM environment (bevel highlights, not fill)
+  const er = new THREE.Scene();
+  er.add(new THREE.Mesh(new THREE.BoxGeometry(10, 8, 10), new THREE.MeshBasicMaterial({ color: 0x0c0818, side: THREE.BackSide })));
+  const panel = (c, k, w, h, x, y, z, ry) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color: new THREE.Color(c).multiplyScalar(k), side: THREE.DoubleSide })); m.position.set(x, y, z); m.rotation.y = ry; er.add(m); };
+  panel(0x9B6BFF, 6, 6, 1.2, -2, 3, -4.9, 0); panel(0xFFE2C0, 5, 2.5, 3, 4.9, 1, 1, -Math.PI / 2); panel(0xC7E44B, 1.5, 2, 2, 0, 0, 4.9, 0);
+  const pm = new THREE.PMREMGenerator(renderer); scene.environment = pm.fromScene(er, .04).texture; scene.environmentIntensity = .32;
+}
+
+// ---------- room
+let WALL = null;
+if (COMIC) {
+  const wm = new THREE.ShaderMaterial({ vertexShader: `varying vec3 vW; void main(){ vec4 w = modelMatrix * vec4(position, 1.); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
+    fragmentShader: `varying vec3 vW; uniform vec3 uBase, uDeep, uHi;
+void main(){
+  float a = .7854; mat2 R = mat2(cos(a), -sin(a), sin(a), cos(a));
+  vec2 f = fract(R * (vW.xy / .05)) - .5;
+  float e = clamp(length(vec2(vW.x / 3.0, (vW.y - 1.9) / 2.1)), 0., 1.);
+  float dens = smoothstep(.22, 1., e) * .95;
+  float m = 1. - smoothstep(.62 * sqrt(dens) - .07, .62 * sqrt(dens) + .07, length(f));
+  vec3 c = mix(uBase, uHi, (1. - e) * .25);
+  gl_FragColor = vec4(mix(c, uDeep, m * step(.01, dens)), 1.);
+}`, uniforms: { uBase: { value: v3(PAL.wall[0]) }, uDeep: { value: v3(PAL.wall[2]) }, uHi: { value: v3(PAL.wall[3]) } } });
+  put(new THREE.Mesh(BX(14, 6, .1), wm), 0, 3, -1.55);
+} else { WALL = put(obj(BX(14, 6, .1), PAL.wall, 0), 0, 3, -1.55); }
+{ const HX = .55, HY = 1.15;
+  if (COMIC) put(new THREE.Mesh(new THREE.PlaneGeometry(3, 3), new THREE.ShaderMaterial({ transparent: true, depthWrite: false,
+    vertexShader: `varying vec2 vUv; varying vec3 vW; void main(){ vUv = uv; vec4 w = modelMatrix * vec4(position, 1.); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
+    fragmentShader: `varying vec2 vUv; varying vec3 vW;
+void main(){
+  float d = length(vUv * 2. - 1.);
+  float a = .7854; mat2 R = mat2(cos(a), -sin(a), sin(a), cos(a));
+  vec2 f = fract(R * (vW.xy / .05)) - .5;
+  float dens = 1. - smoothstep(.15, .85, d);
+  float rad = .66 * sqrt(dens);
+  float m = 1. - smoothstep(rad - .08, rad + .08, length(f));
+  if (m < .01 || d > 1.) discard;
+  gl_FragColor = vec4(.43, .40, .62, m);
+}` })), HX, HY, -1.49);
+ }
+put(obj(BX(14, .1, 9), PAL.floor, 0), 0, -.05, 1.5);
+put(obj(RB(4.6, .03, 3.4, .05), '#3A3057', .004), -.3, .0, 1.2);                    // rug
+
+// shelf with books + neon strip underneath
+const SHELF_X = 1.45, SHELF_Y = 2.0;
+put(obj(RB(1.7, .06, .24, .01), '#3a3450', .005), SHELF_X, SHELF_Y, -1.4);
+[[0xd0645a, .09, .3], [0x5a8fd0, .07, .25], [0xe0b24a, .1, .32], [0x6fbf8a, .08, .27], [0xa070d0, .07, .22], [0xd0645a, .09, .28]]
+  .forEach((b, i) => put(obj(RB(b[1], b[2], .17, .012), '#' + b[0].toString(16).padStart(6, '0'), .004), SHELF_X - .7 + i * .17, SHELF_Y + .03 + b[2] / 2, -1.4));
+put(new THREE.Mesh(BX(1.7, .025, .03), glowMat(new THREE.Color(0xA27BFF).multiplyScalar(COMIC ? 1 : 3))), SHELF_X, SHELF_Y - .05, -1.3);
+if (!COMIC) { const lb = obj(SP(.035), '#FFB070', 0); lb.userData.mat.emissive = new THREE.Color(0xFFB070); lb.userData.mat.emissiveIntensity = 6; put(lb, 2.0, SHELF_Y + .06, -1.3); }
+
+// clock (time from CU.clock)
+const CLK = { x: -.15, y: 2.2, z: -1.49, r: .4 };
+const cc = document.createElement('canvas'); cc.width = cc.height = 256; const c2 = cc.getContext('2d');
+c2.fillStyle = '#e9e6f2'; c2.beginPath(); c2.arc(128, 128, 124, 0, 7); c2.fill();
+c2.strokeStyle = '#222'; c2.lineWidth = 8; c2.beginPath(); c2.arc(128, 128, 120, 0, 7); c2.stroke();
+for (let i = 0; i < 12; i++) { const a = i * Math.PI / 6; c2.lineWidth = 6; c2.beginPath(); c2.moveTo(128 + Math.sin(a) * 100, 128 - Math.cos(a) * 100); c2.lineTo(128 + Math.sin(a) * 114, 128 - Math.cos(a) * 114); c2.stroke(); }
+const hand = (a, len, w) => { c2.lineWidth = w; c2.lineCap = 'round'; c2.beginPath(); c2.moveTo(128, 128); c2.lineTo(128 + Math.sin(a) * len, 128 - Math.cos(a) * len); c2.stroke(); };
+const [ckH, ckM] = String(CU.clock || '03:12').split(':').map(Number);
+hand((ckH % 12 + ckM / 60) * Math.PI / 6, 58, 12); hand(ckM * Math.PI / 30, 88, 8);
+c2.fillStyle = '#c33'; c2.font = 'bold 30px sans-serif'; c2.textAlign = 'center'; c2.fillText(String(CU.clock || '03:12'), 128, 190);
+const clockTex = new THREE.CanvasTexture(cc); clockTex.colorSpace = THREE.SRGBColorSpace;
+put(new THREE.Mesh(new THREE.CircleGeometry(CLK.r, 40), new THREE.MeshBasicMaterial({ map: clockTex, color: 0xd0ccdc, fog: false })), CLK.x, CLK.y, CLK.z);
+if (COMIC) put(new THREE.Mesh(new THREE.CircleGeometry(CLK.r + .022, 40), glowMat(0x151714)), CLK.x, CLK.y, CLK.z - .005);
+
+// ---------- desk
+const DK = { x0: -.55, x1: 2.6, z0: -.3, z1: 2.3 };
+put(obj(RB(DK.x1 - DK.x0, .06, DK.z1 - DK.z0, .02), PAL.desk, I), (DK.x0 + DK.x1) / 2, .72, (DK.z0 + DK.z1) / 2);
+put(obj(BX(DK.x1 - DK.x0, .16, .04), PAL.deskEdge, I), (DK.x0 + DK.x1) / 2, .64, DK.z1 - .03);
+put(obj(BX(.08, .7, 2.4), PAL.deskEdge, I), DK.x0 + .06, .35, 1.0); put(obj(BX(.08, .7, 2.4), PAL.deskEdge, I), DK.x1 - .06, .35, 1.0);
+
+// ---------- laptop
+const LAP = new THREE.Group(); LAP.position.set(-.25, .75, -.1); LAP.rotation.y = -.9; scene.add(LAP);
+put(obj(RB(.66, .03, .46, .01), PAL.lap, .004), 0, .015, 0, LAP);
+const lid = new THREE.Group(); lid.position.set(0, .03, -.2); lid.rotation.x = -.28; LAP.add(lid);
+put(obj(RB(.66, .44, .02, .01), PAL.lapLid, .004), 0, .22, 0, lid);
+const sc = document.createElement('canvas'); sc.width = 660; sc.height = 420; const s2 = sc.getContext('2d');
+s2.fillStyle = '#dfe9ff'; s2.fillRect(0, 0, 660, 420);
+s2.fillStyle = '#9aa3bd'; [[30, 40, 260], [60, 80, 330], [60, 120, 200], [60, 160, 380], [30, 200, 150], [60, 240, 300], [60, 280, 240], [30, 320, 180]].forEach(r => s2.fillRect(r[0], r[1], r[2], 18));
+const scrTex = new THREE.CanvasTexture(sc); scrTex.colorSpace = THREE.SRGBColorSpace;
+const scr = new THREE.Mesh(new THREE.PlaneGeometry(.6, .38), new THREE.MeshBasicMaterial({ map: scrTex, color: COMIC ? 0xf2f6ff : new THREE.Color(.5, .54, .62), fog: false }));
+scr.position.set(0, .22, .0115); lid.add(scr);
+
+// ---------- chair + guy
+const GUY = new THREE.Group(); GUY.position.set(-1.0 + .12, 0, -.15 + .008); GUY.rotation.y = .92;   // .12 m closer to the laptop (v4)
+scene.add(GUY);
+put(obj(RB(.52, .07, .52, .03), PAL.chair, I), 0, .46, -.02, GUY);
+put(obj(RB(.52, .55, .07, .03), PAL.chair, I), 0, .78, -.3, GUY);
+put(obj(CY(.035, .035, .4, 8), '#222232', .004), 0, .24, -.02, GUY);
+[0, 1.05].forEach(a => { const s = obj(BX(.56, .04, .07), '#222232', .004); s.rotation.y = a; put(s, 0, .05, -.02, GUY); });
+const G = buildGuy({ PAL, obj, put, RB, BX, CY, SP, V, I, CU, GUY, COMIC, passport: PS.guy });
+const { up, head, TW, Y, gEye, gBrow, gLid, gmouth, hp } = G;   // characters.js: legs, torso, head, hair, face, headphones
+// arms with hands on the keyboard: two-bone chains solved every frame in poseGuy(); meshes move by position/quaternion only
+scene.updateMatrixWorld(true);
+const handRest = [.08, -.12].map(x => up.worldToLocal(LAP.localToWorld(V(x, .06, .15))));   // near edge of the keyboard
+const SH0 = G.SH0;   // shoulder joint in `up` space (build-dependent)
+const AL = handRest.map((Hd, i) => { const s = i ? 1 : -1, S = SH0(i), E = S.clone().lerp(Hd, .5).add(V(s * .1, -.14, -.02)); return [S.distanceTo(E), E.distanceTo(Hd) - .05]; });
+const { R_UP, R_FA } = G;
+const arms = G.buildArms(AL);
+
+// ---------- Ko
+const KS = .75, KOX = .55; let koLight = null, koRim = null;
+const koG = new THREE.Group(); koG.position.set(KOX, .75, .0); koG.scale.setScalar(KS); scene.add(koG);
+const sq = new THREE.Group(); koG.add(sq);
+const { koN, usN, happy: KO_HAPPY } = buildKo({ PAL, obj, RB, passport: PS.ko }); sq.add(koN); sq.add(usN);   // characters.js (sets PAL.limeC / PAL.usC from the body colour)
+const koMat = koN.userData.mat, usMat = usN.userData.mat;
+const limeC = PAL.limeC.map(v3), redC = PAL.redC.map(v3), usL = PAL.usC.map(v3), usRd = PAL.usR.map(v3);
+const UK = ['uBase', 'uShade', 'uDeep', 'uHi'];
+const WHITE = new THREE.Color(1, 1, 1), red = new THREE.Color(RED), lime = new THREE.Color(LIME);
+const HAPPY = new THREE.Color(KO_HAPPY), HAPPY3 = v3(KO_HAPPY);
+function setKo(w, hp) {
+  hp = hp || 0;
+  if (COMIC) UK.forEach((k, i) => { koMat.uniforms[k].value.copy(limeC[i]).lerp(redC[i], w).lerp(HAPPY3, hp * .6); usMat.uniforms[k].value.copy(usL[i]).lerp(usRd[i], w); });
+  else { const mid = .35; koMat.color.copy(w < .5 ? lime.clone().lerp(WHITE, mid * w * 2) : red.clone().lerp(WHITE, mid * (1 - w) * 2));
+    koMat.color.lerp(HAPPY, hp); koMat.color.multiplyScalar(1 - .12 * hp); koMat.emissive.copy(koMat.color).multiplyScalar(.035 + .08 * hp); if (koLight) { koLight.color.copy(koMat.color); koLight.intensity = .4 * (1 + 2.4 * hp); } if (koRim) koRim.intensity = 2.5 * hp; usMat.color.copy(koMat.color).multiplyScalar(.82); }
+}
+const FS = 8, fc = document.createElement('canvas'); fc.width = 56 * FS; fc.height = 74 * FS; const f2 = fc.getContext('2d');
+const faceTex = new THREE.CanvasTexture(fc); faceTex.colorSpace = THREE.SRGBColorSpace;
+const face = new THREE.Mesh(new THREE.PlaneGeometry(.56, .74), new THREE.MeshBasicMaterial({ map: faceTex, transparent: true, depthWrite: false, fog: false }));
+face.position.set(0, .52, .2015); sq.add(face);
+const dots = [0, 1, 2].map(i => { const m = new THREE.Mesh(new THREE.SphereGeometry(.035, 10, 8), glowMat(0xffffff)); m.position.set((i - 1) * .13, 1.05, .1); sq.add(m); return m; });
+let sparkTex = null;
+if (!COMIC) { const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d'); const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0, 'rgba(255,255,255,.9)'); gr.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = gr; g.fillRect(0, 0, 64, 64); sparkTex = new THREE.CanvasTexture(c); }
+const sparks = [0, 1, 2, 3, 4].map(i => {
+  const col = i % 2 ? 0xffffff : LIME; let m;
+  if (COMIC) m = obj(new THREE.OctahedronGeometry(.055), i % 2 ? ['#FFFFFF', '#E8E8EE', '#C8C8D4', '#FFFFFF'] : PAL.limeC, .008);
+  else { m = new THREE.Mesh(new THREE.OctahedronGeometry(.05), glowMat(new THREE.Color(col).multiplyScalar(2.5)));
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: sparkTex, color: col, transparent: true, opacity: 0, depthWrite: false, fog: false })); sp.visible = false; }
+  koG.add(m); return m; });
+if (!COMIC) { koLight = new THREE.PointLight(0xC7E44B, .4, 0, 2); koLight.position.set(0, .5, .8); koG.add(koLight);
+  koRim = new THREE.PointLight(0xB8EE20, 0, 2.2, 2); koRim.position.set(.25, .9, -.45); koG.add(koRim); }
+
+function rr(x, y, w, h, r) { f2.beginPath(); f2.roundRect(x, y, w, h, r); f2.fill(); }
+function star(cx, cy, R) { f2.beginPath(); for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, r = i % 2 ? R * .45 : R; f2.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r); } f2.closePath(); f2.fill(); }
+let faceKey = '';
+function drawFace(F) {
+  const key = F.emo + '|' + F.blink.toFixed(2) + '|' + F.lx + '|' + F.ly; if (key === faceKey) return; faceKey = key;
+  f2.setTransform(1, 0, 0, 1, 0, 0); f2.clearRect(0, 0, fc.width, fc.height);
+  f2.setTransform(FS, 0, 0, FS, -22 * FS, -11 * FS); f2.fillStyle = INK;
+  const eye = (cx, cy, d) => { f2.save(); f2.translate(cx + F.lx, cy + F.ly); f2.scale(1, F.blink); f2.translate(-cx, -cy); d(); f2.restore(); };
+  if (F.emo === 'stars') { star(39 + F.lx, 45 + F.ly, 11 * (F.blink * .5 + .5)); star(61 + F.lx, 45 + F.ly, 11 * (F.blink * .5 + .5)); f2.beginPath(); f2.ellipse(50, 64, 5, 3, 0, 0, Math.PI); f2.fill(); }
+  else if (F.emo === 'happy') { f2.strokeStyle = INK; f2.lineCap = 'round'; f2.lineWidth = 5.5; [39, 61].forEach(cx => { f2.beginPath(); f2.arc(cx + F.lx, 51 + F.ly, 8.5, Math.PI * 1.12, Math.PI * 1.88); f2.stroke(); });
+    f2.lineWidth = 3.4; f2.beginPath(); f2.arc(50, 60, 6.5, Math.PI * .15, Math.PI * .85); f2.stroke(); }
+  else if (F.emo === 'red') { rr(35, 45, 8, 3.5, 1.7); rr(57, 45, 8, 3.5, 1.7); }
+  else { eye(39, 45.5, () => rr(35, 36, 8, 19, 4)); eye(61, 45.5, () => rr(57, 36, 8, 19, 4)); }
+  faceTex.needsUpdate = true;
+}
+const wState = (e, t) => seg(t, e.start, e.start + .2) * (1 - seg(t, e.end, e.end + .2));
+function faceAt(t) {
+  let emo = 'normal', lx = 0, ly = 0, blink = 1, act = null;
+  for (const e of TL.ko) if (t >= e.start && t < e.end) act = e;
+  if (act) emo = act.state === 'blink' ? 'normal' : act.state;
+  if (emo === 'squint') { blink = .5; lx = -5; }
+  if (emo === 'think') ly = -6;
+  if (act && act.state === 'blink') { const u = (t - act.start) / (act.end - act.start); blink = 1 - .92 * (Math.max(0, 1 - Math.abs(((u * 2) % 1) - .5) * 2)); }
+  if (!act) { const m = (t - 1.3) % 3; if (m >= 0 && m < .14) blink = .08 + .92 * Math.abs(m - .07) / .07; }
+  for (const k of (CU.ko_look || [])) { const w = seg(t, k.start, k.start + .15) * (1 - seg(t, k.end, k.end + .15)); if (w > 0) { lx = Math.round(k.lx * w * 4) / 4; ly = Math.round((k.ly || 0) * w * 4) / 4; } }
+  return { emo, blink, lx, ly };
+}
+
+// ---------- desk clutter (big, in the foreground)
+const mug = new THREE.Group(); put(mug, -.5, .75, 1.35, scene); mug.scale.setScalar(1.55);
+put(obj(CY(.09, .075, .15, 14), '#E9E6F2', .005), 0, .075, 0, mug);
+put(new THREE.Mesh(CY(.078, .078, .01, 14), glowMat(0x4a2c1c)), 0, .147, 0, mug);        // coffee
+{ const h = obj(new THREE.TorusGeometry(.04, .012, 6, COMIC ? 14 : 14), '#E9E6F2', .003); h.position.set(.1, .08, 0); mug.add(h); }
+const wispTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d'); const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32); gr.addColorStop(0, 'rgba(255,255,255,.7)'); gr.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = gr; g.fillRect(0, 0, 64, 64); return new THREE.CanvasTexture(c); })();
+const wisps = [0, 1, 2].map(w => [0, 1, 2, 3, 4, 5, 6, 7, 8].map(j => {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(.07, .07), new THREE.MeshBasicMaterial({ map: wispTex, color: 0xE8E4F8, transparent: true, opacity: 0, depthWrite: false, fog: false }));
+  mug.add(m); return m; }));
+const can1 = obj(CY(.07, .07, .25, 14), '#2FB5D8', .006); put(can1, .22, .875, 1.1);
+put(obj(CY(.073, .073, .045, 14), '#E9E6F2', .003), 0, .0, 0, can1);
+const can2 = new THREE.Group(); put(can2, .6, .83, 1.65); can2.scale.setScalar(1.5); can2.rotation.set(0, .5, 1.45);
+{ const a = obj(CY(.05, .05, .08, 12), '#E0408A', .005); a.position.y = -.05; can2.add(a);
+  const b = obj(CY(.05, .045, .06, 12), '#E0408A', .005); b.position.set(.012, .02, 0); b.scale.set(1.25, .55, .7); b.rotation.z = .35; can2.add(b); }
+const stk = [['#F4D95E', .72, 1.3, .3], ['#EE8FB0', .7, 1.5, -.2], ['#8FDCA8', .9, 1.2, .6]];
+stk.forEach(([c, x, z, r]) => { const n = obj(BX(.2, .006, .2), c, .003); n.rotation.y = r; put(n, x, .762, z); });
+{ const pn = obj(CY(.014, .014, .3, 6), '#E0B24A', .003); pn.rotation.z = 1.5708; pn.rotation.y = .4; put(pn, -.3, .77, 2.1);
+{ const pz = obj(RB(.62, .05, .62, .01), '#C79A62', .005); pz.rotation.y = .3; put(pz, .55, .775, 2.0);
+  const pl = obj(RB(.62, .035, .3, .01), '#B88A55', .005); pl.rotation.set(-.9, .3, 0); put(pl, .62, .92, 1.78);
+  const pi = obj(CY(.2, .2, .02, 14), '#E0A040', .003); pi.position.set(.55, .81, 2.0); scene.add(pi); }
+{ const nb = obj(RB(.34, .035, .46, .01), '#C25555', .005); nb.rotation.y = -.25; put(nb, .05, .7675, 1.45); const pg = obj(BX(.3, .02, .42), '#EDE6D6', .003); pg.rotation.y = -.25; put(pg, .055, .79, 1.45); }; }
+
+// ---------- post: HDR render -> depth DoF -> bloom -> AgX output
+const rt = new THREE.WebGLRenderTarget(W * dpr, H * dpr, { type: THREE.HalfFloatType, samples: 4, depthTexture: new THREE.DepthTexture(W * dpr, H * dpr) });
+const composer = new EffectComposer(renderer, rt); composer.setPixelRatio(dpr); composer.setSize(W, H);
+composer.addPass(new RenderPass(scene, cam));
+const dof = new ShaderPass({
+  uniforms: { tDiffuse: { value: null }, tDepth: { value: null }, uNear: { value: cam.near }, uFar: { value: cam.far },
+    uFocus: { value: 2 }, uScale: { value: 1 }, uMax: { value: 20 }, uPx: { value: new THREE.Vector2(1 / W, 1 / H) } },
+  vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }`,
+  fragmentShader: `#include <packing>
+    varying vec2 vUv; uniform sampler2D tDiffuse; uniform sampler2D tDepth; uniform float uNear, uFar, uFocus, uScale, uMax; uniform vec2 uPx;
+    const float GA = 2.39996323; const float RS = 0.7;
+    float lin(vec2 uv){ return -perspectiveDepthToViewZ(texture2D(tDepth, uv).x, uNear, uFar); }
+    float bsize(float d){ return clamp(abs(1.0/uFocus - 1.0/d) * uScale, 0.0, 1.0) * uMax; }
+    void main(){
+      float cd = lin(vUv), cs = bsize(cd);
+      vec4 c0 = texture2D(tDiffuse, vUv); vec3 col = c0.rgb; float tot = 1.0; float r = RS;
+      for (float a = 0.0; r < uMax; a += GA) {
+        vec2 tc = vUv + vec2(cos(a), sin(a)) * uPx * r;
+        vec3 sc = texture2D(tDiffuse, tc).rgb; float sd = lin(tc); float ss = bsize(sd);
+        if (sd > cd) ss = clamp(ss, 0.0, cs * 2.0);
+        float m = smoothstep(r - 0.5, r + 0.5, ss);
+        col += mix(col / tot, sc, m); tot += 1.0; r += RS / r;
+      }
+      gl_FragColor = vec4(col / tot, c0.a);
+    }` });
+composer.addPass(dof);
+const bloom = new UnrealBloomPass(new THREE.Vector2(W, H), .3, .5, 1.7);
+{ const s0 = bloom.setSize.bind(bloom); bloom.setSize = (w, h) => s0(w / dpr, h / dpr); }   // bloom at 1080 scale at any DPR: the 4K final (render_ss, DPR 2) keeps the draft's halo size
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+// focus per shot (static world points): A both characters, B guy's eyes, C Ko's face; [point, aperture, max blur px]
+scene.updateMatrixWorld(true);
+const LK = COMIC ? null : upgrade({ THREE, scene, renderer, composer, cam, dof, PAL, LAP, lid, GUY, koG, koMat, usMat, SHELF_X, SHELF_Y, W, H, dpr });
+applyLook({ scene, PAL, guy: G, COMIC });
+const FOCUS = { A: [V(-.2, 1.1, .05), 2.2, 16], B: [GUY.localToWorld(V(.0, 1.38, .05)), 4.2, 22], C: [V(KOX, 1.05, .2), 4.5, 22] };
+const SKIN = new Set(); { const hx = new THREE.Color(PAL.skin[0]).getHex(); scene.traverse(o => { const m = o.isMesh && o.material; if (m && m.isMeshPhysicalMaterial && m.color.getHex() === hx) SKIN.add(m); }); }
+const gx = document.getElementById('grain').getContext('2d'), gimg = gx.createImageData(540, 960);
+function hash(i, j) { let n = (i * 374761393 + j * 668265263) | 0; n = Math.imul(n ^ (n >>> 13), 1274126177); return ((n ^ (n >>> 16)) >>> 0) / 4294967295; }
+function drawGrain(t) { const fr = Math.round(t * 30), d = gimg.data; for (let i = 0; i < 540 * 960; i++) { const v = 128 + (hash(i, fr + 7) - .5) * 120; d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v; d[i * 4 + 3] = 255; } gx.putImageData(gimg, 0, 0); }
+const NOCAP = !!window.NOCAP || /nocap/.test(location.search) || !!(window.CUES && window.CUES.nocap);
+
+// ---------- cameras: pos, target, fov, dolly amount
+const CAMS = {
+  A: { p: [0, 2.7, 4.4], t: [0, 1.35, 0], fov: 58, d: .05 },
+  B: { p: [.85, 1.95, 1.7], t: [-1.0, 1.5, -.15], fov: 45, d: .04 },
+  C: { p: [-.7, 1.4, 1.55], t: [.5, 1.1, .05], fov: 46, d: .04, drift: .06 },
+};
+window.__CAMS = CAMS;
+function camAt(t) {
+  const s = TL.shots.find(s => t >= s.start && t < s.end) || TL.shots[TL.shots.length - 1];
+  const c = CAMS[s.cam]; if (!c) return s;
+  let p = seg(t, s.start, s.end), d = s.push ?? c.d;
+  p = Math.pow(p, s.ease ?? 1);
+  const T = V(...c.t), P = V(...c.p);
+  P.lerp(T, d * p);
+  const dr = (c.drift || 0) * p; P.x += dr; T.x += dr;
+  cam.position.copy(P); cam.fov = c.fov; cam.updateProjectionMatrix(); cam.lookAt(T);
+  return s;
+}
+
+const ATMO_CTX = { FOCUS, THREE, scene, cam, renderer, keySpot, LK, GUY, lid, koG, scr, SHELF_X, SHELF_Y };
+// shadows + key light aim (soft)
+if (!COMIC) {
+  scene.traverse(o => { if (o.isMesh && o.material && o.material.isMeshStandardMaterial) { o.castShadow = true; o.receiveShadow = true; } });
+  WALL.receiveShadow = false;
+  const sp = LAP.localToWorld(V(0, .62, -.12)); /* at the screen face, not at the chest: closer gave a white blob on the neck */ keySpot.position.copy(sp).add(V(-.12, 0, -.008)); { const T = GUY.localToWorld(V(0, 1.6, .1)); keySpot.position.sub(T).multiplyScalar(2).add(T); }   /* v4: source 2x farther along the same line (no near-field hot spots on raised hands), intensity x4 */ /* v4: guy moved .12 m toward the laptop, keep the light-to-face geometry of draft2 */ keySpot.target.position.copy(GUY.localToWorld(V(0, 1.6, .1)));
+  { const fill = new THREE.PointLight(0xFFD2A8, .7, 0, 2); fill.position.copy(GUY.localToWorld(V(.1, 1.75, .9))); scene.add(fill); FILL = fill;
+    const kr = new THREE.PointLight(0x9B6BFF, 5, 1.9, 2); kr.position.set(KOX + .05, 1.42, -.95); scene.add(kr);
+    const wash = new THREE.SpotLight(0x8062E0, 34, 0, 1.0, 1, 2); wash.position.set(-.3, 2.6, 3.2); wash.target.position.set(0, 1.9, -1.55); scene.add(wash, wash.target); }
+}
+
+// ---------- guy animation helpers (pure functions of t)
+const KEYS = []; CU.typing.forEach(g => g.keys.forEach(k => KEYS.push(k)));
+const keyPulse = (t, par) => { let s = 0; for (let i = par; i < KEYS.length; i += 2) { const u = (t - KEYS[i]) / .05; if (u > -3 && u < 3) s += Math.exp(-u * u); } return Math.min(1, s); };
+function moodRaw(t) {  // brow y offset, brow tilt (inner down = +), lid open fraction, lean, smile: defaults, overridden by CU.moods entries
+  let by = 0, tilt = .12, lid = .65, lean = 0, smile = 0;
+  for (const m of (CU.moods || [])) if (t >= m.start && t < m.end) { by = m.by ?? by; tilt = m.tilt ?? tilt; lid = m.lid ?? lid; lean = m.lean ?? lean; smile = m.smile ?? smile; }
+  return { by, tilt, lid, lean, smile };
+}
+function mood(t) {  // box-filtered over 0.2 s -> eased transitions, still a pure function of t
+  const o = { by: 0, tilt: 0, lid: 0, lean: 0, smile: 0 }, N = 5;
+  for (let i = 0; i < N; i++) { const m = moodRaw(t - .2 * i / (N - 1)); for (const k in o) o[k] += m[k] / N; }
+  return o;
+}
+// gaze: yaw (about head y) toward Ko or the screen, in guy-head local space
+scene.updateMatrixWorld(true);
+const yawTo = p => { const l = head.worldToLocal(p.clone()); return Math.atan2(l.x, l.z); };
+const YAW_KO = yawTo(koG.localToWorld(V(0, .8, 0))), YAW_SCR = yawTo(LAP.localToWorld(V(0, .2, 0)));
+const lookW = (t, at) => { let w = 0; for (const k of (CU.look || [])) if (k.at === at) w = Math.max(w, seg(t, k.start, k.start + (k.in ?? .29)) * (1 - seg(t, k.end, k.end + (k.out ?? .2)))); return w; };
+const onScreen = t => { let w = lookW(t, 'screen'); CU.typing.forEach(g => { w = Math.max(w, seg(t, g.start - .15, g.start + .05) * (1 - seg(t, g.end, g.end + .2))); }); return w; };
+// hands: dip per key (60 ms down, 90 ms up), enter = right hand from higher; S13 hover with wiggle
+function handDy(t, i) {
+  let dy = 0;
+  for (let k = i; k < KEYS.length; k += 2) { const u = t - (KEYS[k] - .06); if (u > 0 && u < .15) dy = Math.min(dy, -.022 * (u < .06 ? u / .06 : 1 - (u - .06) / .09)); }
+  CU.enter.forEach(e => { if (i !== 1) return; const u = t - (e - .26);
+    if (u > 0 && u < .2) dy = Math.max(dy, .05 * Math.sin(u / .2 * Math.PI / 2)); else if (u >= .2 && u < .26) dy = .05 - .09 * (u - .2) / .06; else if (u >= .26 && u < .45) dy = -.04 * (1 - (u - .26) / .19); });
+  return dy;
+}
+
+// ---------- gestures + two-bone arm solver (pure functions of t)
+const GES = CU.gestures || [];
+const gEnv = (g, t) => (t < g.t || t > g.t + g.dur) ? 0 : out3(seg(t, g.t, g.t + .25)) * (1 - seg(t, g.t + g.dur - .3, g.t + g.dur));
+const gMax = (t, who, type, i) => { let w = 0; for (const g of GES) if (g.who === who && g.type === type && (i == null || !g.side || (g.side === 'R') === (i === 1))) w = Math.max(w, gEnv(g, t)); return w; };
+const gPulse = (t, who, type) => { let v = 0; for (const g of GES) if (g.who === who && g.type === type && t >= g.t && t <= g.t + g.dur) v += (g.dur <= .31 ? .3 : .2) * Math.sin(Math.PI * (t - g.t) / g.dur); return v; };
+const gAmp = (t, who, type) => { let v = 0; for (const g of GES) if (g.who === who && g.type === type) v += gEnv(g, t) * (g.amp ?? 1); return v; };
+const gSink = t => { let v = 0; for (const g of GES) if (g.who === 'guy' && g.type === 'sink') v = Math.max(v, seg(t, g.t, g.t + .44) * (1 - seg(t, g.t + g.dur, g.t + g.dur + .24))); return v; };
+const gJerk = t => { let v = 0; for (const g of GES) if (g.who === 'guy' && g.type === 'jerk' && t >= g.t && t < g.t + g.dur) v = Math.max(v, Math.sin(seg(t, g.t, g.t + g.dur) * Math.PI)); return v; };
+const gShake = t => { let v = 0; for (const g of GES) if (g.who === 'guy' && g.type === 'shake' && t >= g.t && t <= g.t + g.dur) v += .2 * Math.sin(Math.PI * (t - g.t) / g.dur) * Math.sin(4 * Math.PI * (t - g.t) / g.dur); return v; };
+// Ko direction in `up` space (for palm / point / stop)
+const KD = (() => { const a = up.worldToLocal(koG.localToWorld(V(0, .8, 0))), b = up.worldToLocal(GUY.localToWorld(V(0, 1.3, 0))); const d = a.sub(b); d.y = 0; d.normalize(); return d; })();
+const qFP = (fd, pn) => { const Yv = fd.clone().normalize(), Zv = pn.clone().addScaledVector(Yv, -pn.dot(Yv)).normalize(), Xv = new THREE.Vector3().crossVectors(Yv, Zv);
+  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(Xv, Yv, Zv)); };
+const REST_FD = (() => { const a = up.worldToLocal(LAP.localToWorld(V(0, .06, 0))), b = up.worldToLocal(LAP.localToWorld(V(0, .06, 1))), d = b.sub(a); d.y = 0; d.normalize(); if (d.z < 0) d.negate(); d.y = -.35; return d.normalize(); })();
+const REST_PN = V(0, -1, 0).addScaledVector(REST_FD, .35), REST_Q = qFP(REST_FD, REST_PN);
+const POSE = {   // wrist target (up space), fingers dir, palm normal, finger curl, index shown, optional elbow pole
+  finger_up: s => ({ p: V(s * .36, .76, .32), fd: V(s * .05, 1, .15), pn: KD, curl: 1, idx: 1 }),
+  palm: s => ({ p: V(s * -.07, .86, .34), fd: V(s * .3, .6, 1), pn: V(0, 1, 0), curl: .05, idx: 0, pole: V(s * .6, -.5, 1) }),
+  hands_up: s => ({ p: V(s > 0 ? -.06 : -.48, .92, .30), fd: V(s * .5, 1, .3), pn: V(0, .5, 1), curl: .05, idx: 0, pole: V(s * 1, -.5, -.2) }),
+  point: s => ({ p: V(s * -.04, .86, .30), fd: V(KD.x, .15, KD.z), pn: V(-s * .5, -.5, 0), curl: 1, idx: 1, pole: V(s * .6, -.5, 1) }),
+  stop: s => ({ p: V(s * -.05, .92, .36), fd: V(s * .1, 1, .1), pn: KD, curl: 0, idx: 0, pole: V(s * .6, -.5, 1) }),
+  rub_eyes: s => ({ p: V(s * .10, 1.16, .30), fd: V(0, 1, -.1), pn: V(0, 0, -1), curl: .3, idx: 0, pole: V(s * .3, -1, .2) }),
+  shrug: s => ({ p: V(s > 0 ? -.04 : -.46, .70, .30), fd: V(s * .3, .2, 1), pn: V(0, 1, 0), curl: 0, idx: 0, pole: V(s * 1, -.6, -.2) }),
+};
+// ---------- props: code/props/*.js register into window.KO_PROPS[name] = { build, poses, armBase, lookTargets, handPoints, koFx, update } (props/README.md)
+const KX = { THREE, scene, cam, renderer, V, obj, put, link, RB, BX, CY, SP, glowMat, PAL, COMIC, dpr, INK, LIME, clamp, seg, out3, backOut, rmsAt, TL, CU, W, H,
+  up, head, arms, GUY, LAP, lid, koG, sq, KOX, KS, KD, Y, handRest, qFP, yawTo, YAW_KO, YAW_SCR, CAMS, POSE, lookW, gMax, gAmp, keySpot, FILL, FOCUS };
+const PROPS = Object.entries(window.KO_PROPS || {});
+const OLD = new Set(); scene.traverse(o => OLD.add(o));
+PROPS.forEach(([, p]) => p.build && p.build(KX));
+if (!COMIC) scene.traverse(o => { if (!OLD.has(o) && o.isMesh && o.material && o.material.isMeshStandardMaterial) { o.castShadow = true; o.receiveShadow = true; } });   // props built after the base shadow pass
+PROPS.forEach(([, p]) => p.poses && Object.assign(POSE, p.poses(KX)));
+const ARMT = Object.keys(POSE);
+const LT = {}; PROPS.forEach(([, p]) => p.lookTargets && Object.assign(LT, p.lookTargets(KX)));   // name -> { yaw, pitch } for look.at
+const HPTS = [0, 1].map(i => PROPS.flatMap(([, p]) => (p.handPoints && p.handPoints(i, KX)) || []));   // hand-local points of held props (clearance + framing checks)
+function armBase(i, t) { for (const [, p] of PROPS) { const b = p.armBase && p.armBase(i, t, KX); if (b) return b; } return null; }
+const { TC, TH, HH } = G, ZERO = V(0, 0, 0);
+const sdRB = (p, c, h, r) => { const x = Math.abs(p.x - c.x) - (h.x - r), y = Math.abs(p.y - c.y) - (h.y - r), z = Math.abs(p.z - c.z) - (h.z - r);
+  return Math.hypot(Math.max(x, 0), Math.max(y, 0), Math.max(z, 0)) + Math.min(Math.max(x, y, z), 0) - r; };
+const _hinv = new THREE.Matrix4();
+// samples of one arm -> { score (>=0 ok), clear (metric, m) }
+function armEval(S, E, W, q, idxv, rub, ph) {
+  const fd = V(0, 1, 0).applyQuaternion(q), pts = [];
+  for (let k = 0; k < 8; k++) pts.push([S.clone().lerp(E, .3 + .7 * k / 7), R_UP, 0]);
+  for (let k = 0; k < 8; k++) pts.push([E.clone().lerp(W, k / 7), R_FA, 0]);
+  pts.push([W.clone().addScaledVector(fd, .05), .05, 1], [W.clone().addScaledVector(fd, .13), .035, 1]);
+  if (idxv > .5) pts.push([W.clone().addScaledVector(fd, .19), .02, 1]);
+  if (ph) ph.forEach(c => pts.push([W.clone().add(c.clone().applyQuaternion(q)), .003, 0]));
+  let score = 1e9, clear = 1e9, worst = null;
+  for (const [p, r, hand] of pts) {
+    const ct = sdRB(p, TC, TH, .1) - r, ch = sdRB(p.clone().applyMatrix4(_hinv), ZERO, HH, .09) - r, hr = hand && rub;
+    const sT = ct - .003, sH = ch - (hr ? -.002 : .004), sc = Math.min(sT, sH);
+    if (sc < score) { score = sc; worst = { p, body: sT <= sH ? 0 : 1 }; }
+    clear = Math.min(clear, ct, ch + (hr ? .005 : 0));
+  }
+  return { score, clear, worst };
+}
+const _gr = (f, p) => { const e = .004, g = V(f(V(p.x + e, p.y, p.z)) - f(V(p.x - e, p.y, p.z)), f(V(p.x, p.y + e, p.z)) - f(V(p.x, p.y - e, p.z)), f(V(p.x, p.y, p.z + e)) - f(V(p.x, p.y, p.z - e))); return g.normalize(); };
+const THETAS = []; for (let m = 0; m <= 150; m += 6) THETAS.push(m);
+function ik(S, T, L1, L2, pole, theta) {
+  const v = T.clone().sub(S), d = clamp(v.length(), Math.abs(L1 - L2) + .01, L1 + L2 - .004), dir = v.normalize(), W = S.clone().addScaledVector(dir, d);
+  const a = (L1 * L1 - L2 * L2 + d * d) / (2 * d), h = Math.sqrt(Math.max(0, L1 * L1 - a * a));
+  const pp = pole.clone().applyAxisAngle(dir, theta); pp.addScaledVector(dir, -pp.dot(dir)).normalize();
+  return { E: S.clone().addScaledVector(dir, a).addScaledVector(pp, h), W };
+}
+let ARM_CLEAR = 9;
+const _q0 = new THREE.Quaternion(), _up = V(0, 1, 0);
+const setLimb = (m, a, b) => { m.position.copy(a).lerp(b, .5); m.quaternion.setFromUnitVectors(_up, b.clone().sub(a).normalize()); };
+function solveArms(t) {
+  head.updateMatrix(); _hinv.copy(head.matrix).invert();
+  const rubW = gMax(t, 'guy', 'rub_eyes'), shrugW = gMax(t, 'guy', 'shrug');
+  let minClear = 9;
+  arms.forEach((A, i) => {
+    const s = i ? 1 : -1, S = SH0(i); S.y += .05 * shrugW;
+    const fdR = REST_FD.clone().normalize(), base = armBase(i, t);
+    const p = base ? base.p.clone() : handRest[i].clone().addScaledVector(fdR, -.05), q = base ? qFP(base.fd, base.pn) : REST_Q.clone();
+    let curl = base ? base.curl : .35, idx = 0, wAny = 0;
+    ARMT.forEach(ty => { const w = gMax(t, 'guy', ty, i); if (w < 1e-3) return; const P = POSE[ty](s);
+      p.lerp(P.p, w); q.slerp(qFP(P.fd, P.pn), w); curl += (P.curl - curl) * w; idx += (P.idx - idx) * w; wAny = Math.max(wAny, w); });
+    p.y += handDy(t, i) * (1 - wAny) * (base ? 0 : 1);
+    const rub = rubW > .01, pole = (base ? base.pole.clone() : V(s * .8, -.75, -.5)).normalize();
+    ARMT.forEach(ty => { const w = gMax(t, 'guy', ty, i), P = POSE[ty](s); if (w > 1e-3 && P.pole) pole.lerp(P.pole.clone().normalize(), w); }); pole.normalize();
+    let W = p.clone();
+    // push the hand out of torso/head, then search the elbow swing for clearance
+    for (let it = 0; it < 3; it++) {
+      const fd = V(0, 1, 0).applyQuaternion(q);
+      [[.05, .05], [.13, .035]].forEach(([o, r]) => { const c = W.clone().addScaledVector(fd, o);
+        const ct = sdRB(c, TC, TH, .1) - r; if (ct < .003) W.addScaledVector(_gr(x => sdRB(x, TC, TH, .1), c), .003 - ct);
+        const ph = c.clone().applyMatrix4(_hinv), ch = sdRB(ph, ZERO, HH, .09) - r, need = rub ? -.002 : .004;
+        if (ch < need) W.addScaledVector(_gr(x => sdRB(x, ZERO, HH, .09), ph).transformDirection(head.matrix), need - ch); });
+    }
+    let best = null;
+    for (let adj = 0; adj < 20; adj++) {
+      best = null;
+      for (const m of THETAS) {
+        const cands = m === 0 ? [0] : [m, -m].map(d => d * Math.PI / 180);
+        let pick = null;
+        for (const th of cands) { const k = ik(S, W, AL[i][0], AL[i][1], pole, th), ev = armEval(S, k.E, k.W, q, idx, rub, HPTS[i]); k.ev = ev; k.th = th;
+          if (!best || ev.score > best.ev.score) best = k;
+          if (ev.score >= 0 && (!pick || (rubW > .3 ? k.E.y < pick.E.y : k.E.x * s > pick.E.x * s))) pick = k; }
+        if (pick) { best = pick; break; }
+      }
+      if (best.ev.score >= 0) break;
+      // still inside: move the wrist target away from the offending body (a few cm off the keys at most)
+      const w = best.ev.worst, g = w.body ? _gr(x => sdRB(x, ZERO, HH, .09), w.p.clone().applyMatrix4(_hinv)).transformDirection(head.matrix) : _gr(x => sdRB(x, TC, TH, .1), w.p);
+      W.addScaledVector(g, Math.min(.05, -best.ev.score * 1.6 + .003));
+    }
+    const k = best;
+    minClear = Math.min(minClear, k.ev.clear);
+    A.shoulder.position.copy(S); setLimb(A.upper, S, k.E); setLimb(A.fore, k.E, k.W);
+    A.hand.position.copy(k.W); A.hand.quaternion.copy(q);
+    A.fing.rotation.x = curl * 1.15; A.idx.visible = idx > .02; A.idx.scale.setScalar(Math.max(.001, idx));
+  });
+  ARM_CLEAR = minClear;
+}
+// guy: everything driven by t (gs = guy is speaking, r = voice envelope)
+function poseGuy(t, gs, r) {
+  const md = mood(t), bl = (t - 1.1) % 3.7, blk = bl >= 0 && bl < .13 ? Math.abs(bl - .065) / .065 : 1;
+  const sink = gSink(t), jerk = gJerk(t);
+  head.position.set(0, G.HEADY + (gs ? .006 * Math.sin(t * 22) : 0) - .03 * sink, .03 + .07 * jerk);
+  const sw = onScreen(t); let yaw = YAW_KO + (YAW_SCR - YAW_KO) * sw, pitch = 0, eyeLk = sw;
+  for (const k in LT) { const w = lookW(t, k); yaw += (LT[k].yaw - YAW_KO) * w; pitch += (LT[k].pitch || 0) * w; eyeLk = Math.max(eyeLk, w); }
+  yaw += TW;   // yaw in the untwisted frame
+  head.rotation.x = .15 * sink + pitch + gPulse(t, 'guy', 'nod') + (gs ? .05 * r : 0);
+  head.rotation.y = yaw * .55 - TW + gShake(t);
+  head.rotation.z = .16 * gMax(t, 'guy', 'tilt');
+  gmouth.scale.y = gs ? .3 + 1.5 * r : .3; gmouth.scale.x = gs ? 1 - .15 * r : 1;
+  gEye.forEach(p => { p.position.x = .006 + clamp(yaw * .45 * .04, -.02, .02); p.position.y = -.004 - .006 * eyeLk; });
+  gLid.forEach(l => l.scale.y = clamp(1 - Math.min(md.lid, blk), .03, 1));
+  gBrow.forEach((b, i) => { const s = i ? 1 : -1; b.position.y = .115 + md.by; b.rotation.z = s * md.tilt * -1; });
+  gmouth.rotation.z = .16 * md.smile; if (!gs) gmouth.scale.x = 1 + .25 * md.smile;
+  up.position.y = .5 + .004 * Math.sin(t * 1.6) - .025 * sink;
+  up.rotation.x = .22 + md.lean + .07 * gMax(t, 'guy', 'lean') + .04 * jerk + .05 * sink;
+  solveArms(t);
+}
+window.__handScreen = t => {
+  const l = TL.lines.find(l => t >= l.start && t <= l.end); const shot = camAt(t);
+  poseGuy(t, !!(l && l.speaker === 'guy'), l ? rmsAt(t) : 0); scene.updateMatrixWorld(true); cam.updateMatrixWorld(true);
+  const pr = v => { v.project(cam); return [(v.x + 1) / 2, (1 - v.y) / 2]; };
+  return { cam: shot.cam, face: pr(head.localToWorld(V(0, 0, 0))), hands: arms.map((A, i) => ({ i, w: ARMT.reduce((m, ty) => Math.max(m, gMax(t, 'guy', ty, i)), 0), xy: pr(A.hand.localToWorld(V(0, .08, 0))) })), props: HPTS.flatMap((a, i) => a.map(c => pr(arms[i].hand.localToWorld(c.clone())))) };
+};
+window.__armClear = t => { const l = TL.lines.find(l => t >= l.start && t <= l.end); poseGuy(t, !!(l && l.speaker === 'guy'), l ? rmsAt(t) : 0); return ARM_CLEAR; };
+
+// ---------- focus: pure function of t (A, B -> the guy's head; C -> Ko's face). window.__FOCUS_OLD = skit-1 static points (for measuring)
+function updateFocus(t, shot) {
+  if (window.__FOCUS_OLD) return;
+  if (shot.cam === 'A' || shot.cam === 'B') head.getWorldPosition(FOCUS[shot.cam][0]);
+  else if (shot.cam === 'C') FOCUS.C[0].set(KOX - .04 * gAmp(t, 'ko', 'lean') + .15 * Math.sin(-.5), .75 + .52 * KS, .15 * Math.cos(.5));
+}
+window.__focusBlur = t => {   // DoF blur radius (px at 1080 w) at the guy's head centre and at Ko's face centre, without rendering
+  window.__noRender = true; draw(t); window.__noRender = false; cam.updateMatrixWorld();
+  const U = dof.uniforms, bs = p => { const d = -p.clone().applyMatrix4(cam.matrixWorldInverse).z; return Math.min(1, Math.abs(1 / U.uFocus.value - 1 / d) * U.uScale.value) * U.uMax.value; };
+  const sh = TL.shots.find(x => t >= x.start && t < x.end) || TL.shots[TL.shots.length - 1];
+  return { id: sh.id, cam: sh.cam, guy: bs(head.getWorldPosition(V(0, 0, 0))), ko: bs(koG.localToWorld(V(0, .52, .2))) };
+};
+
+// ---------- frame
+const capEl = document.getElementById('cap'), insEl = document.getElementById('ins');
+// ---------- inserts: code/inserts/*.js register into window.KO_INSERTS[name] = { init(el, ctx), draw(t, shot, ev, ctx), capTop? } (props/README.md)
+const INS_W = {};
+Object.entries(window.KO_INSERTS || {}).forEach(([n, I]) => {
+  const w = document.createElement('div'); w.className = 'insw'; w.setAttribute('data-layout-ignore', '');
+  w.style.cssText = 'position:absolute;inset:0;overflow:hidden;visibility:hidden'; insEl.appendChild(w); INS_W[n] = w; I.init && I.init(w, KX);
+});
+let capLine = null;
+function draw(t) {
+  const shot = camAt(t);
+  const line = TL.lines.find(l => t >= l.start && t <= l.end);
+  const r = line ? rmsAt(t) : 0;
+  const cl = TL.lines.find(l => t >= l.start && t <= l.end + .15);
+  if (cl !== capLine) { capLine = cl; capEl.textContent = cl ? cl.text : ''; }
+  capEl.style.opacity = cl ? Math.min(1, (t - cl.start) / .08, (cl.end + .15 - t) / .08) : 0;
+  const gs = !!(line && line.speaker === 'guy');
+  poseGuy(t, gs, r);
+  updateFocus(t, shot);
+  if (!COMIC) atmo(t, ATMO_CTX, shot);
+  SKIN.forEach(m => { m.clearcoat = shot.cam === 'B' ? 0 : .15; m.sheen = shot.cam === 'B' ? .25 : .8; m.specularIntensity = shot.cam === 'B' ? .2 : 1; });
+  if (FILL) FILL.intensity = shot.cam === 'B' ? .15 : .7;
+  if (keySpot) keySpot.intensity *= (shot.cam === 'B' ? .55 : 1);
+  PROPS.forEach(([, p]) => p.update && p.update(t, shot, KX));
+  // Ko
+  const F = faceAt(t); drawFace(F);
+  let wRed = 0, wStars = 0, wThink = 0;
+  for (const e of TL.ko) { const w = wState(e, t); if (e.state === 'red') wRed = w; if (e.state === 'stars') wStars = w; if (e.state === 'think') wThink = w; }
+  let hp = 0; for (const e of TL.ko) if (e.state === 'happy') hp = seg(t, e.start, e.start + .3) * (1 - seg(t, e.end, e.end + .2));
+  setKo(wRed, hp); bloom.strength = .3 + .25 * hp; bloom.threshold = 1.7 - .25 * hp; bloom.radius = .5 + .2 * hp;
+  const kLine = line && line.speaker === 'ko';
+  usN.scale.x = kLine ? .8 + .5 * r : 1;
+  if (COMIC) usMat.uniforms.uFlash.value = .3 * (kLine ? r : 0); else usMat.emissive.copy(koMat.color).multiplyScalar(.1 + .25 * (kLine ? r : 0));
+  let sy = 1, sx = 1, by = 0;
+  if (wStars > 0) { const ph = (t * 2 * Math.PI) / .3; sy = 1 + .08 * wStars * Math.sin(ph); sx = 1 - .05 * wStars * Math.sin(ph); by = .03 * wStars * Math.abs(Math.sin(ph / 2)); }
+  // limit / sparkle effects only if the skit has them
+  const hasL = CU.limit != null, hasS = CU.sparkle != null;
+  const shake = hasL && t >= CU.limit && t < CU.limit + .15 ? .02 * Math.sin(t * 90) * (1 - seg(t, CU.limit, CU.limit + .15)) : 0;
+  const flash = Math.max(hasL && t >= CU.limit && t < CU.limit + .25 ? .5 * (1 - seg(t, CU.limit, CU.limit + .25)) : 0, hasS && t >= CU.sparkle && t < CU.sparkle + .2 ? .8 * (1 - seg(t, CU.sparkle, CU.sparkle + .2)) : 0);
+  const pop = hasS && t >= CU.sparkle && t < CU.sparkle + .3 ? 1 + .12 * Math.sin(Math.PI * Math.pow(seg(t, CU.sparkle, CU.sparkle + .3), .7)) : 1;
+  sy *= pop; sx *= pop; by += hp * .015 * Math.abs(Math.sin(2 * Math.PI * t));
+  koG.position.x = KOX + shake - .04 * gAmp(t, 'ko', 'lean');
+  if (COMIC) koMat.uniforms.uFlash.value = flash; else koMat.emissive.addScalar(.8 * flash);
+  if (kLine) by += .015 * r;
+  const kLean = gAmp(t, 'ko', 'lean'), kTilt = Math.max(gMax(t, 'ko', 'tilt'), 0);
+  sq.rotation.z = .16 * kTilt + .11 * kLean; sq.rotation.x = -.1 * Math.max(0, -kLean);
+  const KF = { sx, sy, by, rotY: -.5, rotX: sq.rotation.x };   // props may bend Ko's squash / hop / turn (hook koFx)
+  PROPS.forEach(([, p]) => p.koFx && p.koFx(t, KF, KX));
+  sq.rotation.x = KF.rotX; sq.scale.set(KF.sx, KF.sy, KF.sx); koG.position.y = .75 + KF.by; koG.rotation.y = KF.rotY;
+  dots.forEach((m, i) => { m.visible = wThink > .05; m.scale.setScalar(.6 + .5 * Math.max(0, Math.sin(t * 9 - i * 1.1))); });
+  sparks.forEach((m, i) => { m.visible = wStars > .05; const a = t * 3 + i * 1.26; m.position.set(Math.cos(a) * .42, .5 + Math.sin(a * 1.7 + i) * .2, Math.sin(a) * .3); m.rotation.y = t * 4; m.scale.setScalar(wStars * (.8 + .4 * Math.sin(t * 12 + i))); });
+  // steam
+  wisps.forEach((w, wi) => w.forEach((m, j) => {
+    const h = j * .028 + .02;
+    m.position.set((wi - 1) * .035 + .022 * Math.sin(t * 2.3 + j * .9 + wi * 2.1) * (.4 + j * .2), .16 + h, 0);
+    m.rotation.z = .5 * Math.sin(t * 2.3 + j * .9 + wi * 2.1); m.material.opacity = (shot.cam === "A" ? .14 : 0) * (1 - j / 9) * (.7 + .3 * Math.sin(t * 1.4 + wi)); m.visible = shot.cam === 'A';
+    m.lookAt(cam.position);
+  }));
+  // insert
+  const ins = shot.cam === 'INSERT';
+  if (!ins) capEl.style.top = '340px';
+  insEl.style.visibility = ins ? 'visible' : 'hidden';
+  if (!ins) for (const n in INS_W) INS_W[n].style.visibility = 'hidden';
+  if (ins) {
+    const nm = shot.ins || (TL.events.find(e => INS_W[e.type] && t >= e.start) || {}).type, I = (window.KO_INSERTS || {})[nm];
+    for (const n in INS_W) INS_W[n].style.visibility = n === nm ? 'visible' : 'hidden';
+    if (I) I.draw(t, shot, TL.events.find(e => e.type === nm) || null, KX);
+    capEl.style.top = (I && I.capTop != null ? I.capTop : 1640) + 'px';
+  } else {
+    const f = FOCUS[shot.cam];
+    if (f) { cam.updateMatrixWorld(); const dz = -f[0].clone().applyMatrix4(cam.matrixWorldInverse).z;
+      dof.uniforms.uFocus.value = dz; dof.uniforms.uScale.value = f[1]; dof.uniforms.uMax.value = f[2]; dof.uniforms.tDepth.value = composer.readBuffer.depthTexture; }
+    if (!window.__noRender) composer.render();
+  }
+  if (!window.__noRender) drawGrain(t);
+  if (NOCAP) capEl.style.opacity = 0;
+}
+
+window.__ARMT = ARMT; window.__bake = { THREE, scene, draw, cam, FOCUS, renderer };
+
+function build() {
+  const tl = gsap.timeline({ paused: true, onUpdate: () => draw(tl.time()) });
+  TL.shots.forEach((sh, i) => tl.fromTo('#tick', { x: i * 7 }, { x: i * 7 + 5, duration: sh.end - sh.start, ease: 'none' }, sh.start));
+  return tl;
+}
+document.fonts.ready.then(() => {
+  const tl = build(); tl.seek(0); draw(0);
+  window.__timelines = window.__timelines || {}; window.__timelines.main = tl;
+  window.__skReady();
+  window.dispatchEvent(new Event('hf-timelines-built'));   // HF 0.9 runtime waits for it after the timelines flag
+});
+}, 0));
+</script>
+</body>
+</html>

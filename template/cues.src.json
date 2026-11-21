@@ -1,0 +1,19 @@
+{
+  "note": "Source of the cues (edit this). Strings like L3.s+0.2 / S5.e-0.1 = line/shot start (s) or end (e) plus an offset; chat1.reply+0.1 = a number from timeline.json events; tools/cues.py resolves them into cues.json and code/cues.js. A gesture may give t + end instead of dur. Run order: prep.py, cues.py, sound/mix.py. KEYS: clock 'HH:MM' (wall clock) | headphones false = no headphones round the guy's neck | typing [{start,end,keys[times],who:'guy'}] guy types on the laptop (hands dip per key, look at screen) | enter [times] right hand hits enter | gestures [{t,dur|end,who:'guy'|'ko',type,side?:'L'|'R',amp?}] types: guy arm poses palm point stop finger_up hands_up rub_eyes shrug (+ prop poses, e.g. show_phone), guy body nod tilt lean sink jerk shake, ko tilt lean (amp -1 = lean away); side L|R picks the hand (guy: L=left hand, farther from Ko; R=right); no side = both | moods [{start,end,by,tilt,lid,lean,smile}] guy face: by = brow height offset (m), tilt = brow tilt (inner down +), lid = lid closed fraction 0.65 default, lean = torso lean, smile; one entry active at a time, 0.2 s eased | look [{start,end,at,in?,out?}] guy gaze: at 'screen' (typing already looks at it) | 'ko' is the default | prop targets (e.g. 'phone'); in/out = ramp seconds | ko_look [{start,end,lx,ly}] Ko's pupils offset in face units (lx -5 = left) | limit t, sparkle t (optional Ko effects: shake+flash / pop+flash) | sfx [{t, src: file in sound/src | preset ding|tick|pop|limit, db: peak dBFS, dur?: seconds to keep}] one-shots for sound/mix.py.",
+  "clock": "23:41",
+  "headphones": true,
+  "typing": [
+    { "start": "L1.s-0.55", "end": "L1.s-0.1", "keys": ["L1.s-0.52", "L1.s-0.39", "L1.s-0.3", "L1.s-0.18"], "who": "guy" }
+  ],
+  "enter": [],
+  "gestures": [
+    { "t": "L3.s+0.3", "dur": 1.5, "who": "guy", "type": "palm", "side": "R" },
+    { "t": "L2.s", "dur": 1.5, "who": "ko", "type": "tilt" }
+  ],
+  "moods": [
+    { "start": "L3.s", "end": "L3.e", "by": 0.014, "tilt": -0.3, "lid": 0.8, "lean": 0, "smile": 0 }
+  ],
+  "look": [],
+  "ko_look": [],
+  "sfx": []
+}

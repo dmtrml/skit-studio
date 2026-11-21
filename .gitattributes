@@ -1,0 +1,14 @@
+# Scripts must keep LF on every OS: a CRLF .sh breaks Git Bash ("set: -\r: invalid option").
+* text=auto
+*.sh text eol=lf
+*.py text eol=lf
+*.mjs text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.wav binary
+*.mp4 binary
+*.png binary
+*.jpg binary
+*.ttf binary
